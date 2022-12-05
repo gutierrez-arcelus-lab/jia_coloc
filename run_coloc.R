@@ -52,8 +52,7 @@ run_coloc <- function(min_df) {
 
 
 # eQTL catalogue paths
-paths2_df <- read_tsv("./data/coloc_inputs/eqtl_catalogue_paths.tsv")
-
+paths_df <- read_tsv("./data/coloc_inputs/eqtl_catalogue_paths.tsv")
 
 
 # GWAS summ stats
