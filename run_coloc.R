@@ -66,8 +66,7 @@ success <- unlist(map(error_df$error, is.null))
 write_rds(eqtl_database, "./results/eqtl_catalogue_retrieved_data.rds")
 
 # Data filtering
-#eqtl_data_filter <- eqtl_database %>%
-eqtl_data_filter <- eqtl_data_all %>%
+eqtl_data_filter <- eqtl_database %>%
     select(-ftp_path) %>%
     mutate(data = map(data, "result")) %>%
     unnest(cols = c(data)) %>%
