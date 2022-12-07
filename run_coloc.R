@@ -65,6 +65,8 @@ success <- unlist(map(error_df$error, is.null))
 
 write_rds(eqtl_database, "./results/eqtl_catalogue_retrieved_data.rds")
 
+#eqtl_database <- read_rds("./results/eqtl_catalogue_retrieved_data.rds")
+
 # Data filtering
 eqtl_data_filter <- eqtl_database %>%
     select(-ftp_path) %>%
@@ -96,7 +98,8 @@ gwas_data <- read_tsv("./data/coloc_inputs/gwas_data.tsv")
 
 # Run coloc
 min_df <- inner_join(eqtl_cat_df, gwas_data, by = c("rsid", "position")) %>%
-    filter(!is.na(eqtl_varbeta))
+    filter(!is.na(eqtl_varbeta)) %>%
+    filter(gwas_beta != 0, gwas_varbeta != 0)
 
 coloc_results <- min_df %>%
     unite("id", c(study, tissue, condition, qtl_group, feature, gene_id, molecular_trait_id), sep = ",") %>%

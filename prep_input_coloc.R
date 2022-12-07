@@ -33,6 +33,14 @@ walk(paths_df$ftp_path, download_tbi)
 # GWAS summ stats
 gwas_stats <- read_excel("./data/gwas/TRAF1_region_summary_stats.xlsx")
 
+# write bed for liftover
+gwas_stats %>%
+    select(start = pos_build36, snp = SNP) %>%
+    mutate(chr = "chr9", end = start, start = start - 1) %>%
+    select(chr, start, end, snp) %>%
+    write_tsv("./data/gwas/TRAF1_region_hg18.bed", col_names = FALSE)
+
+# read file after running liftover
 gwas_stats_38 <- "./data/gwas/TRAF1_region_hg38.bed" %>%
     read_tsv(col_names = c("chr", "start", "end", "rsid")) %>%
     select(chr, pos = end, rsid) %>%
@@ -50,6 +58,7 @@ coords <- gwas_stats_38 %>%
 
 region <- sprintf("%s:%d-%d", sub("chr", "", gwas_stats_38$chr[1]), coords[1], coords[2])
 
+# Save region for eQTL catalogue query
 write_lines(region, "./data/coloc_inputs/region.txt")
 
 gwas_df <- gwas_stats_38 %>%
@@ -62,7 +71,30 @@ gwas_df <- gwas_stats_38 %>%
     select(rsid, pos, log_or, varbeta, type, s)
 
 gwas_min_df <- gwas_df %>%
-    filter(log_or > 0) %>%
     select(rsid, position = pos, gwas_beta = log_or, gwas_varbeta = varbeta)
 
+# Write minimum GWAS dataset for coloc
 write_tsv(gwas_min_df, "./data/coloc_inputs/gwas_data.tsv")
+
+# Select genes 
+annotations <- 
+    file.path("/lab-share/IM-Gutierrez-e2/Public/References/Annotations/hsapiens", 
+              "gencode.v30.primary_assembly.annotation.gtf.gz") %>% 
+    read_tsv(comment = "#", col_types = "c-cii-c-c",
+             col_names = c("chr", "feature", "start", "end", "strand", "info"))
+
+bed <- annotations %>%
+    filter(chr == "chr9", feature == "gene") %>%
+    mutate(tss = case_when(strand == "+" ~ start, 
+			   strand == "-" ~ end, 
+			   TRUE ~ NA_integer_)) %>%
+    filter(between(tss, topsnp - 2.5e5, topsnp + 2.5e5)) %>%
+    mutate(gene_id = str_extract(info, "(?<=gene_id\\s\")[^\"]+"),
+	   gene_name = str_extract(info, "(?<=gene_name\\s\")[^\"]+"),
+	   gene_id = sub("^(ENSG\\d+)\\.\\d+((_PAR_Y)?)$", "\\1\\2", gene_id)) %>%
+    select(chr, start, end, gene_id, gene_name)
+
+gene_ids <- select(bed, gene_id, gene_name)
+
+# Save gene IDs for eQTL catalogue filtering
+write_tsv(gene_ids, "./data/coloc_inputs/gene_annots.tsv")

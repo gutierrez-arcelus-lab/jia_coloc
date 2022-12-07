@@ -1,1 +1,4 @@
 *.tbi
+data/*
+*.png
+results/*

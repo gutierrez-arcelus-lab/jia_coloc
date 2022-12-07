@@ -14,4 +14,4 @@ chain=./data/chain/hg18ToHg38.over.chain.gz
 bedout=./data/gwas/TRAF1_region_hg38.bed
 fail=./data/gwas/failToLift.txt
 
-#liftOver $bedin $chain $bedout $fail
+liftOver $bedin $chain $bedout $fail
