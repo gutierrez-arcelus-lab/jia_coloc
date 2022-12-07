@@ -48,7 +48,7 @@ column_names <- read_tsv(paths_df$ftp_path[1], n_max = 1) %>%
 region <- read_lines("./data/coloc_inputs/region.txt")
 
 # Genes in the region
-genes_df <- read_tsv("./data/annotation/gene_annots.tsv")
+genes_df <- read_tsv("./data/coloc_inputs/gene_annots.tsv")
 
 # Import eQTL catalog
 plan(multisession, workers = 8)
