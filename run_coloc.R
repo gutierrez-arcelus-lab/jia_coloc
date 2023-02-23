@@ -5,18 +5,11 @@ library(tidyverse)
 library(furrr)
 
 # functions
-import_eqtl <- safely(function(ftp_path, region, genes, header) {
-  
-    #Fetch summary statistics with seqminer
-    fetch_table <- 
-	tabix.read.table(tabixFile = ftp_path, 
-			 tabixRange = region) %>%
-	as_tibble()
-
-    colnames(fetch_table) <- header
-    
-    filter(fetch_table, gene_id %in% genes)
-})
+fetch <- function(f, r) {
+    tabix.read.table(tabixFile = f, 
+		     tabixRange = r) |>
+    as_tibble()
+}
 
 run_coloc <- function(min_df) {
 
@@ -38,89 +31,116 @@ run_coloc <- function(min_df) {
     coloc_res
 }
 
+main <- function(ftp, region, gwas_sum, genes) {
 
-# eQTL catalogue paths
-paths_df <- read_tsv("./data/coloc_inputs/eqtl_catalogue_paths.tsv")
+    header <- read_tsv(ftp, n_max = 1) |>
+	names()
+    
+    eqtl <- fetch(f = ftp, r = region) |>
+	as_tibble() |>
+	setNames(header) |>
+	filter(gene_id %in% genes)
 
-column_names <- read_tsv(paths_df$ftp_path[1], n_max = 1) %>%
-    colnames()
+    eqtl_filtered <- eqtl |>
+	mutate(rsid = sub("\\\r$", "", rsid)) |>
+	filter(rsid != "NA") |>
+	group_by(molecular_trait_id, gene_id) |>
+	filter(any(pvalue < 5e-5)) |>
+	ungroup() |>
+	add_count(molecular_trait_id, gene_id, rsid) |>
+	filter(n == 1) |>
+	select(-n) |>
+	add_count(molecular_trait_id, gene_id, type, position) |>
+	filter(n == 1) |>
+	select(-n)
 
+    if ( nrow(eqtl_filtered) == 0 ) {
+	return(tibble(gene_id = NA, molecular_trait_id = NA, nsnps = NA, 
+		      h0 = NA, h1 = NA, h2 = NA, h3 = NA, h4 = NA))
+    }
+
+    eqtl_cat_df <- eqtl_filtered |>
+	mutate(eqtl_sample_size = an/2L,
+	       eqtl_varbeta = se^2) |>
+	select(gene_id, molecular_trait_id, rsid, position, 
+	       eqtl_sample_size, eqtl_maf = maf, eqtl_beta = beta, eqtl_varbeta)
+
+    min_df <- inner_join(eqtl_cat_df, gwas_sum, by = c("rsid", "position")) |>
+	filter(!is.na(eqtl_varbeta)) |>
+	filter(gwas_beta != 0, gwas_varbeta != 0)
+
+    coloc_results <- min_df |>
+	unite("id", c(gene_id, molecular_trait_id), sep = ",") |>
+	{function(x) split(x, x$id)}() |>
+	map(run_coloc)
+
+    coloc_results_summary <- map(coloc_results, "summary") |>
+	map_dfr(function(x) as_tibble(x, rownames = "stat"), .id = "id") |>
+	pivot_wider(names_from = stat, values_from = value) |>
+	select(id, nsnps, h0 = PP.H0.abf, h1 = PP.H1.abf, h2 = PP.H2.abf, h3 = PP.H3.abf, h4 = PP.H4.abf) |>
+	separate(id, c("gene_id", "molecular_trait_id"), sep = ",") |>
+	select(gene_id, molecular_trait_id, everything())
+
+    coloc_results_summary
+}
+
+
+# eQTL catalogue URLs
+ftps_df <- "data/coloc_inputs/eqtl_catalogue_paths.tsv" |>
+    read_tsv() |>
+    filter(quant_method == "ge", study != "GTEx")
+    
+# Region
 region <- read_lines("./data/coloc_inputs/region.txt")
 
-# Genes in the region
-genes_df <- read_tsv("./data/coloc_inputs/gene_annots.tsv")
-
-# Import eQTL catalog
-plan(multisession, workers = 8)
-
-eqtl_database <- paths_df %>%
-    mutate(data = future_map(ftp_path, import_eqtl, 
-			     region = region, genes = genes_df$gene_id, header = column_names))
-
-# Failed data acquisition:
-error_df <- eqtl_database %>%
-    mutate(error = map(data, "error"))
-
-success <- unlist(map(error_df$error, is.null))
-
-write_rds(eqtl_database, "./results/eqtl_catalogue_retrieved_data.rds")
-
-#eqtl_database <- read_rds("./results/eqtl_catalogue_retrieved_data.rds")
-
-# Data filtering
-eqtl_data_filter <- eqtl_database %>%
-    select(-ftp_path) %>%
-    mutate(data = map(data, "result")) %>%
-    unnest(cols = c(data)) %>%
-    filter(type == "SNP") %>%
-    mutate(rsid = sub("\\\r$", "", rsid)) %>%
-    filter(rsid != "NA") %>% 
-    group_by(study, tissue_label, condition_label, qtl_group, molecular_trait_id, gene_id) %>%
-    filter(any(pvalue < 5e-5)) %>%
-    ungroup() %>%
-    add_count(study, tissue_label, condition_label, qtl_group, molecular_trait_id, gene_id, rsid) %>%
-    filter(n == 1) %>%
-    select(-n) %>%
-    add_count(study, tissue_label, condition_label, qtl_group, molecular_trait_id, gene_id, position) %>%
-    filter(n == 1) %>%
-    select(-n)
-
-eqtl_cat_df <- eqtl_data_filter %>%
-    mutate(eqtl_sample_size = an/2L,
-	   eqtl_varbeta = se^2) %>%
-    select(study, tissue = tissue_label, condition = condition_label, qtl_group, 
-	   feature = quant_method, gene_id, molecular_trait_id,
-	   rsid, position, eqtl_sample_size, eqtl_maf = maf, eqtl_beta = beta, eqtl_varbeta)
+# genes to consider (TSS 250kb from GWAS hit)
+genes_dat <- "data/coloc_inputs/gene_annots.tsv" |>
+    read_tsv()
 
 # GWAS summ stats
-gwas_data <- read_tsv("./data/coloc_inputs/gwas_data.tsv")
+gwas_data <- "data/coloc_inputs/gwas_data.tsv" |>
+    read_tsv()
 
+# Set up parallel architecture
+plan(cluster, workers = length(availableWorkers()))
 
-# Run coloc
-min_df <- inner_join(eqtl_cat_df, gwas_data, by = c("rsid", "position")) %>%
-    filter(!is.na(eqtl_varbeta)) %>%
-    filter(gwas_beta != 0, gwas_varbeta != 0)
+# Run analysis
+coloc_res_list <- list()
+error_i <- seq_len(nrow(ftps_df))
+i <- 1
+    
+while ( length(error_i) > 0 && i <= 30) {
 
-coloc_results <- min_df %>%
-    unite("id", c(study, tissue, condition, qtl_group, feature, gene_id, molecular_trait_id), sep = ",") %>%
-    split(.$id) %>% 
-    map(run_coloc)
+    coloc_res_list[[i]] <- ftps_df |>
+	slice(error_i) |> 
+	mutate(res = future_map(ftp_path,  
+				safely(function(x) main(ftp = x, 
+							region = region, 
+							gwas_sum = gwas_data,
+							genes = genes_dat$gene_id))))
 
-coloc_results_df <- map_df(coloc_results, "results", .id = "id") %>%
-    as_tibble() %>%
-    separate(id, c("study", "tissue", "condition", "qtl_group", "feature", "gene_id", "molecular_trait_id"), sep = ",") %>%
-    left_join(genes_df) %>%
-    select(study, tissue, condition, qtl_group, gene_id, gene_name, feature, everything())
+    errors <- coloc_res_list[[i]] |>
+	mutate(err = map(res, "error")) |>
+	pull(err)
 
-coloc_results_summary <- map(coloc_results, "summary") %>%
-    map_dfr(~as_tibble(., rownames = "stat"), .id = "id") %>%
-    pivot_wider(names_from = stat, values_from = value) %>%
-    select(id, nsnps, h0 = PP.H0.abf, h1 = PP.H1.abf, h2 = PP.H2.abf, h3 = PP.H3.abf, h4 = PP.H4.abf) %>%
-    separate(id, c("study", "tissue", "condition", "qtl_group", "feature", "gene_id", "molecular_trait_id"), sep = ",") %>%
-    left_join(genes_df) %>%
-    select(study, tissue, condition, qtl_group, gene_id, gene_name, feature, everything())
+    error_i <- errors |>
+	map(~!is.null(.)) |>
+	unlist() |>
+	which()
 
-# Save results
-write_tsv(coloc_results_df, "./results/coloc_results_df.tsv")
-write_tsv(coloc_results_summary, "./results/coloc_results_summary.tsv")
+    i <- i + 1
+}
 
+if ( length(error_i) > 0) stop("Could not retrieve or process eQTL catalogue data.")
+
+results <- coloc_res_list |>
+    bind_rows() |>
+    mutate(dat = map(res, "result")) |>
+    select(study, tissue_label, condition_label, qtl_group, quant_method, dat) |>
+    unnest(cols = dat) |>
+    left_join(genes_dat, by = "gene_id") |>
+    select(study:quant_method, gene_id, gene_name, everything())
+
+out_name <- "results/coloc_results_df_v2.tsv"
+
+write_tsv(results, out_name)

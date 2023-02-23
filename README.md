@@ -2,7 +2,7 @@
 
 ### 1. Lift coordinates
 
-Execute `./lift.sh` to lift GWAS variant coordinates from GRCh36 tl GRCh38.
+Execute `./lift.sh` to lift GWAS variant coordinates from GRCh36 to GRCh38.
 
 ### 2. Prepare input files
 
