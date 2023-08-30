@@ -1,5 +1,8 @@
 ## Colocalization analysis pipeline
 
+[![DOI](https://zenodo.org/badge/574314128.svg)](https://zenodo.org/badge/latestdoi/574314128)
+
+
 ### 1. Lift coordinates
 
 Execute `./lift.sh` to lift GWAS variant coordinates from GRCh36 to GRCh38.
